@@ -54,7 +54,7 @@ def main():
         print(prompt)
         return
 
-    key = os.environ.get("GROQ_API_KEY")
+    key = os.environ.get("GROQ_API_KEY", "").strip().strip('"').strip("'")
     if not key:
         print("ERROR: GROQ_API_KEY is not set. Get a free key at console.groq.com "
               "and set it as an env var, or as a GitHub secret GROQ_API_KEY. "
@@ -69,15 +69,26 @@ def main():
             {"role": "user", "content": prompt},
         ],
     }).encode()
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    }
     req = urllib.request.Request(
         "https://api.groq.com/openai/v1/chat/completions",
-        data=body, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        data=body, headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             data = json.load(r)
     except Exception as e:
-        print(f"ERROR: Groq request failed: {e}", file=sys.stderr)
+        err = str(e)
+        if hasattr(e, "read"):
+            try:
+                err += f" ({e.read().decode('utf-8', errors='replace')})"
+            except Exception:
+                pass
+        print(f"ERROR: Groq request failed: {err}", file=sys.stderr)
         sys.exit(1)
 
     text = data["choices"][0]["message"]["content"].strip()

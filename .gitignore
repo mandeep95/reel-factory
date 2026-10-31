@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+out/
+reel-studio-kit/
+node_modules/

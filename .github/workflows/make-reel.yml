@@ -1,0 +1,116 @@
+# Free automated reel generation with GitHub Actions.
+# Setup is in SETUP-SIMPLE.md (5 steps, no code knowledge needed).
+#
+# WHAT IS FREE, AND WHAT IS NOT:
+# - GitHub Actions: public repo = unlimited minutes, private repo = 2,000
+#   free minutes/month. A reel takes roughly 15-40 min on a CPU runner.
+# - Groq: free tier, key required, rate limits apply. No Groq call happens
+#   when you pass a script instead of a topic.
+# - Chatterbox: MIT licence, model weights download free from Hugging Face.
+#   No GPU on a GitHub runner, so it runs on CPU (torch CPU build only).
+# - Reel Studio Kit: MIT licence, downloaded free from getanimo.io each run.
+#   Its Remotion engine is free for individuals and small teams.
+#
+# NEVER put GROQ_API_KEY, or any key, in code, in workflow inputs, or in logs.
+# Secrets are passed only as env vars to the step that needs them.
+name: Make a reel
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Topic (leave empty if you pass a script)"
+        required: false
+        default: ""
+      script:
+        description: "Full Hindi script in Devanagari (leave empty if you pass a topic)"
+        required: false
+        default: ""
+      reel_id:
+        description: "Reel slug, lowercase letters/numbers/dashes, e.g. subah-jaldi"
+        required: true
+        default: "my-reel"
+      voice_engine:
+        description: "Voice engine"
+        required: true
+        default: "chatterbox"
+        type: choice
+        options: [chatterbox, gtts]
+
+jobs:
+  make-reel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Reel Studio Kit (free, MIT)
+        run: |
+          curl -L --fail -o reel-studio-kit.zip "https://getanimo.io/blog/reel-studio-kit/reel-studio-kit.zip"
+          unzip -q reel-studio-kit.zip
+          ls reel-studio-kit/package.json
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: reel-studio-kit/package-lock.json
+
+      - name: Install kit
+        working-directory: reel-studio-kit
+        run: npm install
+
+      - name: Cache pip + models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/huggingface
+            reel-studio-kit/tools/.venv
+          key: reel-cache-${{ runner.os }}-v1
+
+      - name: Install voice engine
+        run: |
+          if [ "${{ inputs.voice_engine }}" = "chatterbox" ]; then
+            pip install --quiet torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+            pip install --quiet chatterbox-tts
+          else
+            pip install --quiet gtts
+          fi
+
+      - name: Write script input (if given)
+        if: inputs.script != ''
+        env:
+          SCRIPT_INPUT: ${{ inputs.script }}
+        run: printf '%s' "$SCRIPT_INPUT" > /tmp/input-script.txt
+
+      - name: Make the reel
+        run: |
+          set -e
+          ARGS="--kit-dir reel-studio-kit --id ${{ inputs.reel_id }} --voice-engine ${{ inputs.voice_engine }}"
+          if [ -n "${{ inputs.script }}" ]; then
+            python make_reel.py $ARGS --script-file /tmp/input-script.txt
+          else
+            python make_reel.py $ARGS --topic "${{ inputs.topic }}"
+          fi
+
+      - name: Upload reel
+        uses: actions/upload-artifact@v4
+        with:
+          name: reel-${{ inputs.reel_id }}
+          path: |
+            out/${{ inputs.reel_id }}.mp4
+            reel-studio-kit/projects/${{ inputs.reel_id }}/script.md
+          if-no-files-found: error
+          retention-days: 30
